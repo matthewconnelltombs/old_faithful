@@ -1,0 +1,526 @@
+---
+title: "Old Faithful"
+author: "Matthew Connell-Tombs"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+Loading in the Old Faithful data set and viewing it (including making a normalized copy).
+Throughout the analysis I will look at these techniques on both the original data and normalized set, and we can see the impact this has.
+
+```{r}
+data(faithful)
+plot(faithful, pch=20, main="Old Faithful")
+
+norm_faithful <- scale(faithful)
+plot(norm_faithful, pch=20, main="Old Faithful Normalized")
+```
+
+K-Means
+
+
+```{r}
+k_means_iterations <- function(data, k) {
+  
+  data <- data.frame(data[,1], data[,2])
+  
+  rand <- sample(1:nrow(data), k)
+  clusters <- data[rand,]
+  
+  assignment_vec <- c()
+  last_assignment <- c(0)
+  
+  #iteration counter
+  iter <- 1
+  stop <- 0
+
+  while (stop == 0) {
+    for (i in 1:nrow(data)) {
+      
+      #find the euclidean distance of the ith observation to each of the clusters
+      dist <- dist(rbind(data[i,], clusters))
+      
+      i_cluster <- which.min(dist[1:k])
+      assignment_vec[i] <- i_cluster
+    }
+
+    if (all(assignment_vec == last_assignment)) {
+      stop <-  1
+    }
+
+    last_assignment <- assignment_vec
+
+    combined_data <- cbind(data, assignment_vec)
+    clusters <- aggregate(. ~ assignment_vec, data = combined_data, FUN = mean)
+    clusters <- clusters[, -1]
+    
+    # plot(faithful, pch=20, col=last_assignment)
+
+    iter <- iter + 1
+    
+    if (stop == 1){
+      combined_data <- cbind(data, assignment_vec)
+      clusters <- aggregate(. ~ assignment_vec, data = combined_data, FUN = mean)
+      clusters <- clusters[, -1]
+    }
+  }
+  return(list("Clusters" = clusters,
+              "Assignment" = last_assignment))
+}
+```
+
+
+
+Optimal k - elbow
+
+Here we can see this suggests two clusters.
+
+```{r}
+kmean_withinss <- function(k) {
+  cluster <- kmeans(faithful, k)
+  return (cluster$tot.withinss)
+}
+
+# Set maximum cluster 
+max_k <-20 
+# Run algorithm over a range of k 
+wss <- sapply(1:max_k, kmean_withinss)
+# Create a data frame to plot the graph
+elbow <-data.frame(1:max_k, wss)
+
+plot(elbow$X1.max_k, elbow$wss, type = "p", pch = 16, col = "black", 
+     xlab = "k", ylab = "Total Within Sum of Squares", 
+     main="Elbow Method for Optimal k")
+lines(elbow$X1.max_k, elbow$wss, type = "l", col = "blue")
+axis(1, at = seq(0, 20, by = 1))
+```
+
+Here we try many different starting points to make sure we are not stuck in any local optima.
+
+```{r}
+set.seed(10)
+clusters <- kmeans(faithful,2)
+print(clusters$totss)
+plot(faithful, pch=20, col=clusters$cluster + 1, main="Old Faithful - K-Means")
+points(clusters$center, pch=17, cex=3, col=c(2,3))
+
+
+
+# random starting points
+
+set.seed(100)
+
+min_totss <- 999999999
+
+for (iter in 1:1000){
+  index_1 <- sample(nrow(faithful),1)
+  index_2 <- index_1
+  while (index_2 == index_1) {index_2 <- sample(nrow(faithful), 1)}
+  
+  mu_1 <- faithful[index_1,]
+  mu_2 <- faithful[index_2,]
+  
+  centers <- matrix(c(mu_1,mu_2), nrow=2, byrow=TRUE)
+
+  output <- kmeans(faithful, centers = centers)
+
+  if (output$totss < min_totss){
+    min_totss <- output$totss
+
+    opt_mu_1 <- mu_1
+    opt_mu_2 <- mu_2
+  }
+}
+
+# Saved the best values from the 1000 iterations
+save(opt_mu_1, opt_mu_2,
+     file = "kmeans.RData")
+
+initial_centers <- matrix(c(opt_mu_1, opt_mu_2), ncol=2)
+kmeans_optimal <- kmeans(faithful, centers = initial_centers)
+print(kmeans_optimal$totss)
+plot(faithful, pch=20, col=kmeans_optimal$cluster + 1, main="Old Faithful - K-Means")
+points(kmeans_optimal$center, pch=17, cex=3, col=c(2,3))
+```
+
+This is now using K-Means on the normalized data set.
+As K-means uses a distance function, we see it preforms much better on the normalized data.
+If we were to define a modified distance function which took into account the scales of the x and y axis, we could use the original data set.
+
+```{r}
+result <- kmeans(faithful, 2)
+plot(faithful, pch=20, col=result$cluster + 1, main="Old Faithful")
+points(result$center, pch=17, cex=3, col=c(2,3))
+
+result <- kmeans(norm_faithful, 2)
+plot(faithful, pch=20, col=result$cluster + 1, main="Normalized Old Faithful - K-Means")
+center_points <- result$center
+center_points[,1] <- center_points[,1] * attr(norm_faithful, 'scaled:scale')[1] + attr(norm_faithful, 'scaled:center')[1]
+center_points[,2] <- center_points[,2] * attr(norm_faithful, 'scaled:scale')[2] + attr(norm_faithful, 'scaled:center')[2]
+points(center_points, pch=17, cex=3, col=c(2,3))
+```
+
+
+
+
+
+DBscan - OPTICS
+
+Once again we first apply this method onto the original data set.
+We pick a value of epsilon such that we split the data into two clusters.
+
+```{r}
+library(dbscan)
+
+db_optics <- optics(faithful, minPts = 10)
+plot(db_optics)
+
+eps = 2.2
+    
+db_res <- extractDBSCAN(db_optics, eps_cl = eps)
+
+plot(db_res, main=paste("Reachability, Epsilon =", eps))                              
+
+shapes <- mapply(function(x) {if (x==0) return(8) else return(20)}, db_res$cluster)
+col = c(1:length(unique(db_res$cluster)))
+
+plot(waiting ~ eruptions, data=faithful, 
+     col=col[db_res$cluster + 1], 
+     pch=shapes,      
+     cex=1, 
+     main=paste("Old Faithful - OPTICS, eps_cl = ", eps))    
+```
+
+We now apply this method onto the normalized data set.
+Again we pick a value of epsilon such that we split the data into two clusters.
+We see much better results here.
+
+```{r}
+db_optics <- optics(norm_faithful, minPts = 10)
+plot(db_optics)
+
+eps = 0.52
+    
+db_res <- extractDBSCAN(db_optics, eps_cl = eps)
+
+plot(db_res, main=paste("Reachability, Epsilon =", eps))                              
+
+shapes <- mapply(function(x) {if (x==0) return(8) else return(20)}, db_res$cluster)
+col = c(1:length(unique(db_res$cluster)))
+
+plot(waiting ~ eruptions, data=faithful, 
+     col=col[db_res$cluster + 1], 
+     pch=shapes,      
+     cex=1, 
+     main=paste("Normalized Old Faithful - OPTICS, eps_cl = ", eps))        
+```
+
+
+
+
+HClust
+
+From the dendrogram, we can see this suggests two clusters as well.
+
+```{r}
+clusters <- hclust(dist(faithful),  method = 'average')
+plot(clusters)
+
+clusterCut <- cutree(clusters, 2)
+plot(faithful, pch=20, col=clusterCut + 1, main="Old Faithful - Hierarchical Clustering")
+```
+
+The nrmalized data set has a much better split between clusters.
+
+```{r}
+clusters <- hclust(dist(norm_faithful),  method = 'average')
+plot(clusters)
+
+clusterCut <- cutree(clusters, 2)
+plot(faithful, pch=20, col=clusterCut + 1, main="Normalized Old Faithful - Hierarchical Clustering")
+```
+
+
+
+
+GMM with EM
+
+```{r}
+# Bivariate Normal Density Function
+
+density_bivariate <- function(x, mu, sigma){
+  val = ((1/(2*pi)) * det(sigma)^(-0.5) * 
+           exp((-1/2) * t(x-mu) %*% solve(sigma) %*% (x-mu)))
+  return(val)
+}
+
+# loglikelihood
+
+loglikelihood <- function(dataset, pi_1, pi_2, mu_1, mu_2, sigma_1, sigma_2){
+  
+  loglik_sum <- 0
+  
+  for (row in 1:nrow(dataset)){
+    
+    g_1 <- pi_1 * density_bivariate(as.numeric(dataset[row,]), mu_1, sigma_1)
+    g_2 <- pi_2 * density_bivariate(as.numeric(dataset[row,]), mu_2, sigma_2)
+    
+    loglik_sum <- loglik_sum + log(g_1 + g_2)
+  }
+  return(loglik_sum)
+}
+
+# E Step
+
+E.step <- function(dataset, pi_1, pi_2, mu_1, mu_2, sigma_1, sigma_2){
+  
+  p1 <- rep(0, times=nrow(dataset))
+  p2 <- rep(0, times=nrow(dataset))
+  
+  for (row in 1:nrow(dataset)){
+    
+    g_1 <- pi_1 * density_bivariate(as.numeric(dataset[row,]), mu_1, sigma_1)
+    g_2 <- pi_2 * density_bivariate(as.numeric(dataset[row,]), mu_2, sigma_2)
+    
+    p1[row] <- g_1 / (g_1 + g_2)
+    p2[row] <- g_2 / (g_1 + g_2)
+  }
+  return(list(p1, p2))
+}
+
+# M Step
+
+M.step <- function(dataset, p1, p2, mu_1, mu_2){
+  
+  mu_sum_1 <- c(0,0)
+  mu_sum_2 <- c(0,0)
+  
+  sigma_sum_1 <- cbind(c(0,0),c(0,0))
+  sigma_sum_2 <- cbind(c(0,0),c(0,0))
+  
+  for (row in 1:nrow(dataset)){
+    mu_sum_1 <- mu_sum_1 + p1[row] * as.numeric(dataset[row,])
+    mu_sum_2 <- mu_sum_2 + p2[row] * as.numeric(dataset[row,])
+  }
+  
+  mu_1 <- mu_sum_1/sum(p1)
+  mu_2 <- mu_sum_2/sum(p2)
+  
+  for (row in 1:nrow(dataset)){  
+    sigma_sum_1 <- (sigma_sum_1 + p1[row] * (as.numeric(dataset[row,]) - mu_1) %*% 
+                      t(as.numeric(dataset[row,]) - mu_1))
+    sigma_sum_2 <- (sigma_sum_2 + p2[row] * (as.numeric(dataset[row,]) - mu_2) %*% 
+                      t(as.numeric(dataset[row,]) - mu_2))
+  }
+  
+  sigma_1 <- sigma_sum_1/sum(p1)
+  sigma_2 <- sigma_sum_2/sum(p2)
+  
+  pi_1 <- sum(p1)/length(p1)
+  pi_2 <- sum(p2)/length(p2)
+  
+  return(list(pi_1, pi_2, mu_1, mu_2, sigma_1, sigma_2))
+}
+
+# atiken
+
+atiken <- function(loglik, k, eps = 1e-04) {
+  continue = TRUE
+  
+  if (k > 2) {
+    lm1 = loglik[k]
+    lm = loglik[(k - 1)]
+    lm_1 = loglik[(k - 2)]
+    
+    am = (lm1 - lm)/(lm - lm_1)
+    lm1.Inf = lm + (lm1 - lm)/(1 - am)
+    val = lm1.Inf - lm
+    
+    if (val < eps & val >= 0)
+      continue = FALSE
+  }
+  return(continue)
+}
+
+# EM
+
+EM <- function(pi_1, pi_2, mu_1, mu_2, 
+               sigma_1, sigma_2, dataset=faithful, maxn = 50){
+  k = 1
+  loglik = c()
+  loglik <- c(loglik, loglikelihood(dataset, pi_1, pi_2, 
+                                    mu_1, mu_2, sigma_1, sigma_2))
+  
+  while (atiken(loglik, k = k) & k < maxn){
+    E.step_results <- E.step(dataset, pi_1, pi_2, mu_1, mu_2, sigma_1, sigma_2)
+    p1 <- E.step_results[[1]]
+    p2 <- E.step_results[[2]]
+    
+    M.step_results <- M.step(dataset, p1, p2, mu_1, mu_2)
+    pi_1 <- M.step_results[[1]]
+    pi_2 <- M.step_results[[2]]
+    
+    mu_1 <- M.step_results[[3]]
+    mu_2 <- M.step_results[[4]]
+    
+    sigma_1 <- M.step_results[[5]]
+    sigma_2 <- M.step_results[[6]]
+    
+    loglik <- c(loglik, loglikelihood(dataset, pi_1, pi_2, 
+                                      mu_1, mu_2, sigma_1, sigma_2))
+    k <- k+1
+  }
+  return(list(pi_1, pi_2, mu_1, mu_2, sigma_1, sigma_2, loglik))
+}
+```
+
+```{r}
+library(mnormt)
+
+plot_asg <- function(pi_1, pi_2, mu_1, mu_2, sigma_1, sigma_2, title=""){
+  plot(faithful, pch=20, main = title)
+  
+  x <- seq(1, 5.5, 0.25) 
+  y <- seq(40, 100, 0.25)
+  f1 <- function(x, y) dmnorm(cbind(x, y), mu_1, sigma_1)
+  z1 <- outer(x, y, f1)
+  contour(x, y, z1, nlevels = 5, add=TRUE)
+  
+  f2 <- function(x, y) dmnorm(cbind(x, y), mu_2, sigma_2)
+  z2 <- outer(x, y, f2)
+  contour(x, y, z2, nlevels = 5, add=TRUE)
+  
+  #plot(1:length(opt_loglik), opt_loglik, type = "l",
+  #     xlab = "Iteration", ylab = "Loglikelihood")
+  
+  E.step_results <- E.step(faithful, pi_1, pi_2, 
+                           mu_1, mu_2, sigma_1, sigma_2)
+  
+  z1 <- E.step_results[[1]]
+  z2 <- E.step_results[[2]]
+  
+  max_z <- rep(0, times=length(z1))
+  
+  for (iter in 1:length(z1)){
+    if (z1[iter] > z2[iter]){
+      max_z[iter] <- 1
+    } else {
+      max_z[iter] <- 2
+    }
+  }
+  return(max_z)
+}
+```
+
+
+Here we see the dangers of using any starting point, the algorithm can get stuck in local optima.
+Next we try iterating over many random starting distribution to find a global optima.
+
+```{r}
+# Initial Values
+
+pi_1 <- 0.1
+pi_2 <- 0.9
+
+mu_1 <- c(2, 60)
+mu_2 <- c(2, 50)
+
+sigma_1 <- cbind(c(0.1,0),c(0,0.1))
+sigma_2 <- cbind(c(10,0), c(0,10))
+
+. <- plot_asg(pi_1, pi_2, mu_1, mu_2, sigma_1, sigma_2, 
+              "Old Faithful - Poor Starting Distribution")
+
+# Function & Output
+
+EM_output <- EM(pi_1, pi_2, mu_1, mu_2, sigma_1, sigma_2)
+
+pi_1 <- EM_output[[1]]
+pi_2 <- EM_output[[2]]
+mu_1 <- EM_output[[3]]
+mu_2 <- EM_output[[4]]
+sigma_1 <- EM_output[[5]]
+sigma_2 <- EM_output[[6]]
+loglik <- EM_output[[7]]
+
+asg <- plot_asg(pi_1, pi_2, mu_1, mu_2, sigma_1, sigma_2, 
+                "Old Faithful - Poor Ending Distribution")
+plot(faithful, pch=20, col=asg + 1, main="Old Faithful - Clustering")
+```
+
+
+```{r}
+rand_start <- function(){
+  
+  pi_1 <- runif(1)
+  pi_2 <- 1 - pi_1
+  
+  mu_1 <- c(runif(1, 1, 6), runif(1, 40, 100))
+  mu_2 <- c(runif(1, 1, 6), runif(1, 40, 100))
+  
+  # sd1, sd2, corr12
+  sigma_temp1 <- c(runif(2, 0, 20), runif(2, -1, 1))
+  sigma_1 <- cbind(c(sigma_temp1[1]^2, prod(sigma_temp1)),
+                   c(prod(sigma_temp1), sigma_temp1[2]^2))
+  
+  # sd1, sd2, corr12
+  sigma_temp2 <- c(runif(2, 0, 20), runif(2, -1, 1))
+  sigma_2 <- cbind(c(sigma_temp2[1]^2, prod(sigma_temp2)),
+                   c(prod(sigma_temp2), sigma_temp2[2]^2))
+  
+  return(list(pi_1, pi_2, mu_1, mu_2, sigma_1, sigma_2))
+}
+
+
+# set.seed(10)
+# 
+# max_loglik <- -999999999
+# 
+# for (iter in 1:100){
+#   print(iter)
+#   initial_val <- rand_start()
+# 
+#   EM_output <- EM(initial_val[[1]], initial_val[[2]],
+#                   initial_val[[3]], initial_val[[4]],
+#                   initial_val[[5]], initial_val[[6]])
+# 
+#   if (max(EM_output[[7]]) > max_loglik){
+#     max_loglik <- max(EM_output[[7]])
+# 
+#     opt_int_val <- initial_val
+#     opt_pi_1 <- EM_output[[1]]
+#     opt_pi_2 <- EM_output[[2]]
+#     opt_mu_1 <- EM_output[[3]]
+#     opt_mu_2 <- EM_output[[4]]
+#     opt_sigma_1 <- EM_output[[5]]
+#     opt_sigma_2 <- EM_output[[6]]
+#     opt_loglik <- EM_output[[7]]
+#   }
+# }
+# 
+# save(opt_int_val, opt_pi_1, opt_pi_2,
+#      opt_mu_1, opt_mu_2, opt_sigma_1, opt_sigma_2,
+#      opt_loglik, file = "gmm.RData")
+# 
+# # Saved the best values from the 100 iterations
+```
+
+
+Much better!
+
+We can note here that normalization was not needed as the distribution takes into account the x and y axis scales.
+
+```{r}
+load("gmm.RData")
+
+asg <- plot_asg(opt_pi_1, opt_pi_2, opt_mu_1, opt_mu_2, opt_sigma_1, opt_sigma_2, 
+                "Old Faithful - Looped Random Ending Distribution")
+
+plot(faithful, pch=20, col=asg + 1, main="Old Faithful - Looped Random Clustering")
+```
+
+
+
+
+
